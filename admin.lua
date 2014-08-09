@@ -1,4 +1,5 @@
  local	pass = 0
+ local	co_client = {}
  local	client_lev = {}
  local	sys_level = {}
  
@@ -11,6 +12,7 @@
 local	cmd_list = {
 					"!help",
 					"!lev",
+					"!listplayer",
 					"!spec999",
 					"!levlist",
 					"!getguid",
@@ -24,7 +26,11 @@ local	cmd_list = {
 					"!mute",
 					"!kick",
 					"!putteam",
+					"!passvote",
+					"!cancelvote",
 					"!finger",
+					"!gethealth",
+					"!givehealth",
 					"!setlevel",
 					"!ban",
 					"!ref",
@@ -81,16 +87,125 @@ function	copyTableAt(array, at)
 	return newArray
 end
 
+function	eraseElem(array, elem)
+	for i, str in ipairs(array) do
+		if (str == elem) then
+			table.remove(array, i)
+			return true
+		end
+	end
+	return false
+end
+
+function	clearTable(array)
+	for k, v in pairs(array) do
+		array[k] = nil
+	end
+end
+
+function	epurFromColor(str)
+	local	tmp
+
+	tmp = string.gsub(str, "%^$", "^^ ")
+	tmp = string.gsub(tmp, "(^%w)", "")
+	return tmp
+end
+
+function	getBiggestWord(array, idx, step)
+	local	biggest = 0
+	local	tmp
+
+	while (array[idx] ~= nil) do
+		tmp = epurFromColor(array[idx])
+		if (string.len(tmp) > biggest) then
+			biggest = string.len(tmp)
+		end
+		idx = idx + step
+	end
+	return biggest
+end
+
+function	createSpaces(amount)
+	local	spaces = ""
+
+	for i = 0, amount do
+		spaces = spaces .. " "
+	end
+	return spaces
+end
+
+function	formatToTable(array, width)
+	local	size = table.getn(array)
+	local	spaces = {}
+	local	final = {}
+	local	nb_column
+	local	i = 1
+	
+	if (width > size) then
+		nb_column = size
+	else
+		nb_column = width
+	end
+	for i = 1, nb_column do
+		spaces[i] = getBiggestWord(array, i, width) + 1
+	end
+	while (i <= size) do
+		local	j = 0
+		local	str = ""
+		while (j < nb_column and i + j <= size) do
+			local	tmp
+			
+			tmp = epurFromColor(array[i + j])
+			str = str .. array[i + j] .. createSpaces(spaces[j + 1] - string.len(tmp))
+			j = j + 1
+		end
+		table.insert(final, str)
+		i = i + j
+	end
+	return final
+end
+
 function	getName(id)
 	return string.gsub(et.gentity_get(id, "pers.netname"), "%^$", "^^ ")
 end
+
+function	getCvar(id, cvar)
+	return et.Info_ValueForKey(et.trap_GetUserinfo(id), cvar)
+end
+
+function	getTeamName(id)	-- 1: Axis | 2: Allie | 3: Spec
+	local	name
+	
+	if (id == 1) then name = "^t   Axis   "
+	elseif (id == 2) then name = "^q  Allies  "
+	elseif (id == 3) then name = "^8 Spectator "
+	else name = "" end
+	return name
+end
+
+function	isAlive(id)
+	if (tonumber(et.gentity_get(id, "health")) > 0) then
+		return true
+	end
+	return false
+end
+
+function	getStatus(id)
+	if (et.gentity_get(id, "sess.muted", 1) == 1) then
+		return "^qMuted"
+	elseif (tonumber(et.gentity_get(id,"sess.referee")) == 1) then
+		return "^2Referee"
+	end
+	return "^7Normal"
+end
+
 -- tab[1] = name | tab[2] = guid | tab[3] = level
 
 function	fill_client_level(tab, maxclients)
 	local	i = 0
 
 	while (i < maxclients) do
-		local	cl_guid = string.lower(et.Info_ValueForKey(et.trap_GetUserinfo(i), "cl_guid"))
+		local	cl_guid = string.lower(getCvar(i, "cl_guid"))
 
 		if (cl_guid == tab[2]) then
 			client_lev[i + 1] = tonumber(tab[3])
@@ -297,18 +412,72 @@ end
 
 function	helpCmd(client, flag, unused1, unused2)
 	local	bits = convert_to_binary(flag)
+	local	cmd = {}
+	local	finalList = {}
 	local	tflag = flag
 	local	i = 1
 
-	et.trap_SendServerCommand(client, "chat \"\nCommand list^q:\n\"")
+	et.trap_SendServerCommand(client, "print \"\nCommand list^q:\n\n\"")
 	while (cmd_list[i] ~= nil) do
-		if (bits[i] == 1) then et.trap_SendServerCommand(client, "chat \""..cmd_list[i].."\"") end
+		if (bits[i] == 1) then
+			table.insert(cmd, cmd_list[i])
+		end
 		i = i + 1
 	end
+	finalList = formatToTable(cmd, 4)
+	for _, str in ipairs(finalList) do
+		et.trap_SendServerCommand(client, "print \""..str.."\n\"")
+	end
+	et.trap_SendServerCommand(client, "print \"\n^7Total^q: ^2"..table.getn(cmd).." ^7command"..((table.getn(cmd) > 1) and "s" or "").."\n\n\"")
 end
 
 function	levCmd(client, unused1, rank, unused2)
 	et.trap_SendServerCommand(-1, "chat \"^7Player ^7"..getName(client).."^7 is level ^q"..getLev(client).."^7, rank: ^2"..rank.."\"")
+end
+
+function	listPlayerCmd(client, unused1, rank, unused2)
+	local	array = {}
+	local	finalList = {}
+	local	maxclients = tonumber(et.trap_Cvar_Get("sv_maxclients")) - 1
+	local	nbColumn = 6
+
+	table.insert(array, "^q#")
+	table.insert(array, "^7L")
+	table.insert(array, "^2RANK")
+	table.insert(array, "^7NAME")
+	table.insert(array, "^7ALIVE")
+	table.insert(array, "^7STATUS")
+	for i = 1, 3 do
+		for j = 0, maxclients do
+			if (et.gentity_get(j, "pers.connected") == 2 and et.gentity_get(j, "sess.sessionTeam") == i) then
+				table.insert(array, tostring(j))
+				table.insert(array, tostring(getLev(j)))
+				table.insert(array, tostring(get_pl_rank_from_lev(getLev(j))))
+				table.insert(array, tostring(getName(j)))
+				table.insert(array, tostring((isAlive(j) == true) and "^2  O" or "^q  O"))
+				table.insert(array, tostring(getStatus(j)))
+			end
+		end
+	end
+	finalList = formatToTable(array, nbColumn)
+	et.trap_SendServerCommand(client, "print \"\n\"")
+	for i, str in ipairs(finalList) do
+		if (i >= 2) then
+			local	cuTeam = et.gentity_get(array[nbColumn * (i - 1) + 1], "sess.sessionTeam")
+			
+			if (i == 2) then
+				et.trap_SendServerCommand(client, "print \"^z----------------------------------------"..getTeamName(cuTeam).."^z------------------------------\n\"")
+			elseif (i > 2) then
+				local	prevTeam = et.gentity_get(array[nbColumn * (i - 2) + 1], "sess.sessionTeam")
+				
+				if (cuTeam ~= prevTeam) then
+					et.trap_SendServerCommand(client, "print \"^z----------------------------------------"..getTeamName(cuTeam).."^z------------------------------\n\"")
+				end
+			end
+		end
+		et.trap_SendServerCommand(client, "print \""..str.."\n\"")
+	end
+	et.trap_SendServerCommand(client, "print \"\n\"")
 end
 
 function	inactiveCmd(unused1, unused2, unused3, unused4)
@@ -335,7 +504,7 @@ function	levlistCmd(client, flag, rank, id)
 end
 
 function	getguidCmd(client, unused1, unused2, unused3)
-	local	pl_guid = string.lower(et.Info_ValueForKey(et.trap_GetUserinfo(client), "cl_guid"))
+	local	pl_guid = string.lower(getCvar(client, "cl_guid"))
 
 	if (pl_guid == nil or pl_guid == "unknown") then
 		et.trap_SendServerCommand(client, "chat \"Unknown guid\"")
@@ -440,7 +609,7 @@ function	kickCmd(unused1, unused2, unused3, id)
 end
 
 function	putteamCmd(client, unused2, unused3, id, argv)
-	local	player_team = et.gentity_get(id, "sess.sessionTeam")	-- 1: Axis | 2: Allie | 3: Spec
+	local	player_team = 2	-- 1: Axis | 2: Allie | 3: Spec
 	local 	player_name = getName(id)
 	local	command = ""
 	local	teamName = ""
@@ -477,11 +646,40 @@ function	putteamCmd(client, unused2, unused3, id, argv)
 	et.trap_SendServerCommand(-1, "chat \"^3Putteam^w: ^1" ..player_name.." ^fjoined the "..teamName.."\"")
 end
 
+function    passVoteCmd(unused1, unused2, unused3, unused4)
+    et.trap_SendConsoleCommand(et.EXEC_APPEND , "passvote") 
+end
+
+function    cancelVoteCmd(unused1, unused2, unused3, unused4)
+    et.trap_SendConsoleCommand(et.EXEC_APPEND , "cancelvote") 
+end
+
 function	fingerCmd(client, unused2, unused3, id)
 	local	userinfo = et.trap_GetUserinfo(id)
 	local	name = getName(id)
 	local	ip = et.Info_ValueForKey(userinfo, "ip")
-	et.trap_SendServerCommand(client, "chat \"^3Finger: ^7["..name.."]^7 | id: ["..id.."] | ip: ["..ip.."]\"")
+	local	pl_guid = string.lower(getCvar(id, "cl_guid"))
+
+	et.trap_SendServerCommand(client, "chat \"^3Finger: ^7["..name.."]^7 | id: ["..id.."] | ip: ["..ip.."] | guid: ["..pl_guid.."]\"")
+end
+
+function	getHealthCmd(client, unused2, unused3, id)
+	local	hp = tonumber(et.gentity_get(id, "health"))
+	local	name = getName(id)
+	
+	et.trap_SendServerCommand(client, "chat \""..name.." ^7has ^2"..hp.." ^7hp\"")
+end
+
+function	giveHealthCmd(client, unused2, unused3, id, argv)
+	local	hp = tonumber(et.gentity_get(id, "health"))
+	local	amount = tonumber(argv[4])
+
+	if (amount <= 0 or amount > 30000) then	
+		et.trap_SendServerCommand(client, "chat \"Amount must be between ^q[^71 ^2- ^730000^q]\"")
+		return
+	end
+	et.gentity_set(id, "health", hp + amount)
+	et.trap_SendServerCommand(id, "cpm \"You were given ^2"..amount.." ^7hp\"")
 end
 
 function	setlevelCmd(adm, unused1, unused2, client, argv) -- set the new level of a client
@@ -587,6 +785,7 @@ end
 local cmdTable = 	{
 						{helpCmd, nil, nil},
 						{levCmd, nil, nil},
+						{listPlayerCmd, nil, nil},
 						{inactiveCmd, nil, nil},
 						{levlistCmd, nil, nil},
 						{getguidCmd, nil, nil},
@@ -600,7 +799,11 @@ local cmdTable = 	{
 						{muteCmd, playerExist, checkLevel},
 						{kickCmd, playerExist, checkLevel},
 						{putteamCmd, playerExist, checkLevel},
+						{passVoteCmd, nil, nil},
+						{cancelVoteCmd, nil, nil},
 						{fingerCmd, playerExist, checkLevel},
+						{getHealthCmd, playerExist, nil},
+						{giveHealthCmd, playerExist, checkLevel},
 						{setlevelCmd, playerExist, checkLevel},
 						{banCmd, playerExist, checkLevel},
 						{refCmd, nil, nil},
@@ -654,18 +857,21 @@ function 	et_ClientBegin(clientNum)
 		get_pl_levels()
 	end
 	pass = 1
-	if (gamestate == 2) then
-		local	name = string.gsub(et.gentity_get(clientNum, "pers.netname"), "%^$", "^^ ")
+	if (eraseElem(co_client, clientNum) == true) then
+		local	name = getCvar(clientNum, "name")
 		local	rank = get_pl_rank_from_lev(getLev(clientNum))
 
 		et.trap_SendServerCommand(-1, "chat \"^7Welcome to "..name..", ^2"..rank.."\"")
 	end
 end
 
-function 	et_ClientConnect(clientNum, firstTime, isBot )
+function 	et_ClientConnect(clientNum, firstTime, isBot)
+	if (firstTime == 0) then return end
 	get_pl_levels()	-- need to refresh the players level
+	table.insert(co_client, clientNum)
 end
 
 function	et_ClientDisconnect(clientNum)
 	get_pl_levels()	-- need to refresh the players level
+	eraseElem(co_client, clientNum)
 end
