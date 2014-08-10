@@ -213,7 +213,7 @@ function	fill_client_level(tab, maxclients)
 		i = i + 1
 	end
 end
-c
+
 function	get_pl_levels() -- load client levels
 	local	maxclients = tonumber((et.trap_Cvar_Get("sv_maxClients")) - 1)
 	local	file = io.open("pl_levels.txt", "r")
