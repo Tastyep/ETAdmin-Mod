@@ -213,7 +213,7 @@ function	fill_client_level(tab, maxclients)
 		i = i + 1
 	end
 end
-
+c
 function	get_pl_levels() -- load client levels
 	local	maxclients = tonumber((et.trap_Cvar_Get("sv_maxClients")) - 1)
 	local	file = io.open("pl_levels.txt", "r")
@@ -289,7 +289,7 @@ end
 
 function	countAlivePlayers(id)
 	local	maxclients = tonumber((et.trap_Cvar_Get( "sv_maxClients" )) -1)
-	local	team = tonumber(et.gentity_get(i, "sess.sessionTeam"))
+	local	team = tonumber(et.gentity_get(id, "sess.sessionTeam"))
 	local	alive = 0
 
 	if (team == 3) then return 1 end
