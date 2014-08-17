@@ -349,6 +349,7 @@ end
 
 function	countAlivePlayers(id)
 	local	maxclients = tonumber((et.trap_Cvar_Get("sv_maxClients")) -1)
+
 	local	team = tonumber(et.gentity_get(id, "sess.sessionTeam"))
 	local	alive = 0
 
