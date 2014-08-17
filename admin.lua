@@ -1,6 +1,8 @@
  local	pass = 0
+ local	cnoname = nil
  local	co_client = {}
  local	client_lev = {}
+ local	client_guid = {}
  local	sys_level = {}
  
  --[[
@@ -28,37 +30,66 @@ local	cmd_list = {
 					"!putteam",
 					"!passvote",
 					"!cancelvote",
+					"!rename",
 					"!finger",
 					"!gethealth",
 					"!givehealth",
 					"!setlevel",
 					"!ban",
+					"!banlist",
+					"!unban",
 					"!ref",
 					"!unref"
 					}
 
+function	getFileContent(filename)
+	local	file = io.open(filename, "r")
+	local	content
+
+	if (file == nil) then
+		return nil
+	end
+	content = file:read("*all")
+	file:close();
+	return content
+end
+
+function	writeList(list, filename)
+	local	file = io.open(filename, "w")
+
+	if (file == nil) then
+		xwrite(-1, "cpm \"^3Warning Failed to open file: "..filename.."\"")
+		return false
+	end
+	for _, line in ipairs(list) do
+		file:write(line.."\n")
+	end
+	file:close()
+	return true
+end
+			
 function	skip_carac(str, spe, i)
 	while (string.sub(str, i, i) == sep) do
 		i = i + 1
 	end
 	return 	i
 end
- 
+
 function	explode(str, sep)
 	local	tab = {}
-	local	len = string.len(str)
-	local	wend = 1
-	local	y = 1
+	local	len = string.len(str) + 1
+	local	wend = skip_carac(str, sep, 1)
+	local	wstart = wend
+	local	hit = 1
 
-	wend = skip_carac(str, sep, wend)
-	wstart = wend
-	while (wend <= len) do
-		local carac = string.sub(str, wend, wend)
-		if (carac == sep or wend == len) then
-			if (wend == len) then wend = wend + 1 end 
-			tab[y] = string.sub(str, wstart, wend - 1)
-			y = y + 1
+	while (wstart < len) do
+		local	carac = string.sub(str, wend, wend)
+
+		if (carac == sep or wend == (len - 1)) then
+			if (wend == (len - 1) and carac ~= sep) then hit = 0 end
+			table.insert(tab, string.sub(str, wstart, wend - hit))
 			wend = skip_carac(str, sep, wend) + 1
+			if (wend == (len - 1)) then wend = wend + 1 end
 			wstart = wend
 		else
 			wend = wend + 1
@@ -70,7 +101,7 @@ end
 function	join(array, sep)
 	local	finalStr = ""
 	for i, str in ipairs(array) do
-		if (i > 1) then finalStr = finalStr .. " " end
+		if (i > 1) then finalStr = finalStr .. sep end
 		finalStr = finalStr .. str
 	end
 	return finalStr
@@ -104,11 +135,7 @@ function	clearTable(array)
 end
 
 function	epurFromColor(str)
-	local	tmp
-
-	tmp = string.gsub(str, "%^$", "^^ ")
-	tmp = string.gsub(tmp, "(^%w)", "")
-	return tmp
+	return et.Q_CleanStr(str) 
 end
 
 function	getBiggestWord(array, idx, step)
@@ -173,6 +200,17 @@ function	getCvar(id, cvar)
 	return et.Info_ValueForKey(et.trap_GetUserinfo(id), cvar)
 end
 
+function	getIp(id)
+	local	userinfo = et.trap_GetUserinfo(id)
+	local	ip = et.Info_ValueForKey(userinfo, "ip")
+	local	a = string.find(ip, ':')
+	
+	if (a ~= nil) then
+		ip = string.sub(ip, 1, a - 1)
+	end
+	return ip
+end
+
 function	getTeamName(id)	-- 1: Axis | 2: Allie | 3: Spec
 	local	name
 	
@@ -199,6 +237,15 @@ function	getStatus(id)
 	return "^7Normal"
 end
 
+function	getClientProGuid(id)
+	for i, array in ipairs(client_guid) do
+		if (tonumber(id) == tonumber(array[1])) then
+			return array[2]
+		end
+	end
+	return 0
+end
+
 -- tab[1] = name | tab[2] = guid | tab[3] = level
 
 function	fill_client_level(tab, maxclients)
@@ -206,7 +253,7 @@ function	fill_client_level(tab, maxclients)
 
 	while (i < maxclients) do
 		local	cl_guid = string.lower(getCvar(i, "cl_guid"))
-
+		
 		if (cl_guid == tab[2]) then
 			client_lev[i + 1] = tonumber(tab[3])
 		end
@@ -239,9 +286,8 @@ function	getEpuredName(id)	-- remove spaces and color codes
 	local	name = et.gentity_get(id, "pers.netname")
 
 	if (name == nil) then return nil end
-	name = string.gsub(name, "%^$", "^^ ")
+	name = epurFromColor(name)
 	name = string.gsub(name, " ", "")
-	name = string.gsub(name, "(^%w)", "")
 	return	name
 end
  
@@ -251,6 +297,20 @@ end
 
 function	setLev(clientId, lev)
 	client_lev[clientId + 1] = tonumber(lev)
+end
+
+function	getLastIndexOf(str, char)
+	local	lastIndex = nil
+	local	p = string.find(str, char, 1)
+
+	lastIndex = p
+	while (p) do
+		p = string.find(str, char, p + 1)
+		if p then
+			lastIndex = p
+		end
+	end
+	return lastIndex
 end
 
 --[[
@@ -288,8 +348,8 @@ function	checkmuted(client)
 end
 
 function	countAlivePlayers(id)
-	local	maxclients = tonumber((et.trap_Cvar_Get( "sv_maxClients" )) -1)
-	local	team = tonumber(et.gentity_get(i, "sess.sessionTeam"))
+	local	maxclients = tonumber((et.trap_Cvar_Get("sv_maxClients")) -1)
+	local	team = tonumber(et.gentity_get(id, "sess.sessionTeam"))
 	local	alive = 0
 
 	if (team == 3) then return 1 end
@@ -337,7 +397,7 @@ function	get_flag(line)
 	commands = explode(line, ',')
 	for _, cmd in ipairs(commands) do
 		j = 1
-		while (cmd_list[j] ~= nil and string.find(cmd_list[j], cmd) == nil) do
+		while (cmd_list[j] ~= nil and cmd_list[j] ~= cmd) do
 			j = j + 1
 		end
 		if (cmd_list[j] ~= nil) then
@@ -358,7 +418,6 @@ function	get_levels()		-- get levels from file
 		while (line ~= nil) do
 			levels[i] = {}		-- create the second dimention to stock the informations
 			local	name = get_level_name(line)
-			
 			if (name == nil) then return nil end
 			levels[i][1] = name
 			line = string.sub(line, string.find(line, '=') + 1)
@@ -563,7 +622,7 @@ function	warnCmd(client, unused1, unused2, id, argv)
 	local	warnsound = "sound/misc/referee.wav"
 	local	soundindex = et.G_SoundIndex(warnsound)
 	local	reasonTable = copyTableAt(argv, 4)
-	local	reason = join(reasonTable)
+	local	reason = join(reasonTable, " ")
 	local	wName = getEpuredName(id)
 
 	et.G_Sound(id, soundindex)
@@ -654,13 +713,24 @@ function    cancelVoteCmd(unused1, unused2, unused3, unused4)
     et.trap_SendConsoleCommand(et.EXEC_APPEND , "cancelvote") 
 end
 
-function	fingerCmd(client, unused2, unused3, id)
-	local	userinfo = et.trap_GetUserinfo(id)
-	local	name = getName(id)
-	local	ip = et.Info_ValueForKey(userinfo, "ip")
-	local	pl_guid = string.lower(getCvar(id, "cl_guid"))
+function	renameCmd(client, unused2, unused3, id, argv)
+	local	name = argv[4]
+	if (name == nil) then
+		et.trap_SendServerCommand(client, "chat \"^8Syntax : ^g!rename ^7name newName\n\"")
+		return
+	end
+	local	userinfo = et.Info_SetValueForKey(et.trap_GetUserinfo(id), "name", name)
+	et.trap_SetUserinfo(id, userinfo)
+	et.ClientUserinfoChanged(id)
+end 
 
-	et.trap_SendServerCommand(client, "chat \"^3Finger: ^7["..name.."]^7 | id: ["..id.."] | ip: ["..ip.."] | guid: ["..pl_guid.."]\"")
+function	fingerCmd(client, unused2, unused3, id)
+	local	name = getName(id)
+	local	ip = getIp(id)
+	local	pl_guid = string.lower(getCvar(id, "cl_guid"))
+	local	pr_guid = getClientProGuid(id)
+
+	et.trap_SendServerCommand(client, "print \"^3Finger: ^7["..name.."]^7 | id: ["..id.."] | ip: ["..ip.."]\nclient guid: ["..pl_guid.."]\netpro guid: ["..pr_guid.."]\"")
 end
 
 function	getHealthCmd(client, unused2, unused3, id)
@@ -738,17 +808,105 @@ function	setlevelCmd(adm, unused1, unused2, client, argv) -- set the new level o
 	return 0
 end
 
-function	banCmd(client, unused1, unused2, id, ban_time)
-	ban_time = tonumber(ban_time)
+function	banlistCmd(client, unused1, unused2, unused3)
+	local	tmp = getFileContent("banlist.txt")
+	if (tmp == nil) then
+		et.trap_SendServerCommand(client, "print \"\n^7Total: ^q0\"")
+		return
+	end
+	local	content = explode(tmp, "\n")
+	local	remainingTime
+	local	formatTable = {}
+	
+	table.insert(formatTable, "Nom")
+	table.insert(formatTable, "Ip")
+	table.insert(formatTable, "Etpro Guid")
+	table.insert(formatTable, "Client Guid")
+	table.insert(formatTable, "Ban Time")
+	table.insert(formatTable, "Remaining")
+	for _, str in ipairs(content) do
+		local	sep = getLastIndexOf(str, '|')
+		if (sep ~= nil) then
+			local	name = string.sub(str, 2, sep - 1)
+			str = string.sub(str, sep + 2)
+			local	plInfo = explode(str, ' ')
+
+			remainingTime = tonumber(plInfo[4]) - (os.time() - tonumber(plInfo[5]))
+			if (remainingTime < 0) then remainingTime = 0 end
+			table.insert(formatTable, name)
+			table.insert(formatTable, plInfo[1])
+			table.insert(formatTable, plInfo[2])
+			table.insert(formatTable, plInfo[3])
+			table.insert(formatTable, plInfo[4])
+			table.insert(formatTable, remainingTime)
+		end
+	end
+	formatTable = formatToTable(formatTable, 6)
+	for _, str in ipairs(formatTable) do
+		et.trap_SendServerCommand(client, "print \""..str.."\n\"")
+	end
+	et.trap_SendServerCommand(client, "print \"^7Total: ^q"..table.getn(content).."\"")
+end
+
+function	unbanCmd(client, unused1, unused2, unused3, argv)
+	local	Bname = argv[3]
+	local	tmp = getFileContent("banlist.txt")
+	if (tmp == nil) then return end
+	local	content = explode(tmp, "\n")
+	local	hit = 0
+	local	plInfo
+
+	for i, str in ipairs(content) do
+		if (hit == 0) then
+			local sep = getLastIndexOf(str, '|')
+			if (sep ~= nil) then
+				local	name = string.sub(str, 2, sep - 1)
+				
+				if (string.find(epurFromColor(name), epurFromColor(Bname)) ~= nil) then
+					hit = i
+				end
+			end
+		end
+	end
+	if (hit == 0) then
+		et.trap_SendServerCommand(client, "chat \"^7Player "..Bname.." ^7not found in the banlist\"")
+		return
+	end
+	
+	local	str = content[hit]
+	table.remove(content, hit)
+	writeList(content, "banlist.txt")
+	local	sep = getLastIndexOf(str, '|')
+	local	name = string.sub(str, 2, sep - 1)
+	str = string.sub(str, sep + 2)
+	local	plInfo = explode(str, ' ')
+
+	et.trap_SendConsoleCommand(et.EXEC_APPEND , "PB_SV_UnBanGuid " .. plInfo[3]) -- cl_guid 
+	et.trap_SendConsoleCommand(et.EXEC_INSERT , "pb_sv_updbanfile")
+	et.trap_SendServerCommand(-1, "cpm \"^7Player "..name.." ^7has been unbanned^q.\"")
+end
+
+function	banCmd(client, unused1, unused2, id, argv)
+	local	ban_time = tonumber(argv[4])
+	local	ip = getIp(id)
+
 	if (ban_time == nil) then
 		ban_time = 6000000
 	end
-	et.trap_SendServerCommand(-1, "chat \"Drop "..id.." for "..ban_time.."\"")
 	if (ban_time <= 0) then
 		et.trap_SendServerCommand(client, "chat \"ban time must be positive\"")
 		return 1
 	end
-	et.trap_DropClient(id, "Banned by admin", tonumber(ban_time)) -- ban for x2 mins
+	local	file = io.open("banlist.txt", "a")
+	local	cuTime = os.time()
+	
+	if (file == nil) then
+		et.trap_SendServerCommand(client, "cpm \"^3Warning: ^7Ban could not be saved\"")
+	else
+		file:write("|"..getName(id) .. "| "..ip.." "..getClientProGuid(id).." " ..string.lower(getCvar(id, "cl_guid")).. " " ..ban_time.." "..cuTime.."\n")
+		file:close()
+	end
+	et.trap_DropClient(id, "Banned by admin", ban_time)
 end
 
 function	refCmd(client, unused1, unused2, unused3)
@@ -801,11 +959,14 @@ local cmdTable = 	{
 						{putteamCmd, playerExist, checkLevel},
 						{passVoteCmd, nil, nil},
 						{cancelVoteCmd, nil, nil},
+						{renameCmd, playerExist, checkLevel},
 						{fingerCmd, playerExist, checkLevel},
 						{getHealthCmd, playerExist, nil},
 						{giveHealthCmd, playerExist, checkLevel},
 						{setlevelCmd, playerExist, checkLevel},
 						{banCmd, playerExist, checkLevel},
+						{banlistCmd, nil, nil},
+						{unbanCmd, nil, nil},
 						{refCmd, nil, nil},
 						{unrefCmd, nil, nil}
 					}
@@ -829,6 +990,23 @@ function	handle_cmd(client, flag, rank, arg, id)
 	return 0
 end
 
+function	catchPm(clientNum, arg)
+	local	id, nameT = get_player_info(arg[2])
+	if (id == -1) then return 0 end
+
+	local	maxclients = tonumber((et.trap_Cvar_Get("sv_maxClients")) - 1)
+	local	array = copyTableAt(arg, 3)
+	local	str = join(array, " ")
+	local	nameF = getName(clientNum)
+	
+	nameT = getName(id)
+	for i = 0, maxclients do
+		if (et.gentity_get(i, "pers.connected") == 2 and getLev(i) >= 10 and i ~= id and i ~= clientNum) then -- Means admin to me, replace the value by yours
+			et.trap_SendServerCommand(i, "chat \"("..nameF.."^7 -> "..nameT.."^7): "..str.."\"")
+		end
+	end
+end
+
 function	et_ClientCommand(clientNum, command)
 	local	argc = et.trap_Argc()
 	local	i = 0
@@ -844,23 +1022,111 @@ function	et_ClientCommand(clientNum, command)
 		local	rank = get_pl_rank_from_lev(getLev(clientNum))
 		
 		if (handle_cmd(clientNum, flag, rank, arg, id) == 1) then return 1 end
+	elseif (arg[1] == "m" and arg[2] ~= nil and arg[3] ~= nil) then	-- send it to admins
+		catchPm(clientNum, arg)
 	end
 	return 0
 end
 
-function 	et_ClientBegin(clientNum)
-	local	gamestate = tonumber(et.trap_Cvar_Get( "gamestate"))
+------------------
 
-	if (pass == 0) then
+function	removeClientGuid(id)
+	for i, array in ipairs(client_guid) do
+		if (id == array[1]) then
+			table.remove(client_guid, i)
+			return true
+		end
+	end
+	return false
+end
+
+function	checkIfBanned(id)
+	local	tmp = getFileContent("banlist.txt")
+	if (tmp == nil) then return false, 0 end
+	local	content = explode(tmp, "\n")
+	local	clientInfo = {getName(id), getIp(id), getClientProGuid(id), string.lower(getCvar(id, "cl_guid"))}
+
+	for j, str in ipairs(content) do
+		local	hit = 0
+		local	sep = getLastIndexOf(str, '|')
+		local	name = string.sub(str, 2, sep - 1)
+		str = string.sub(str, sep + 2)
+		local	plInfo = explode(str, ' ')
+		table.insert(plInfo, 1, name)				-- name, ip, etpro_guid, cl_guid
+
+		for i, info in ipairs(clientInfo) do
+			if (info == plInfo[i]) then
+				hit = 1
+			end
+		end
+		if (hit == 1) then
+			local	remainingTime = tonumber(plInfo[5]) - (os.time() - tonumber(plInfo[6]))
+			
+			if (remainingTime <= 0) then
+				local	tab = {nil, nil, plInfo[1]}
+				unbanCmd(-1, nil, nil, nil, tab)
+				return false
+			end
+			for i, info in ipairs(clientInfo) do
+				if (info ~= nil and info ~= plInfo[i]) then
+					if (i ~= 3 or (i == 3 and info ~= "0")) then -- etpro guid not registered
+						plInfo[i] = info	-- update ban info
+					end
+				end
+			end
+			content[j] = "|" .. plInfo[1] .. "| "..plInfo[2].." "..plInfo[3].." "..plInfo[4].." "..plInfo[5].." "..plInfo[6]
+			writeList(content, "banlist.txt")
+			return true, remainingTime
+		end
+	end
+	return false, 0
+end
+
+function	et_Print(text)
+	if (cnoname == nil) then return end
+	local	cleantext = et.Q_CleanStr(text)
+
+	if (string.find(cleantext,"etpro IAC:") ~= nil) then 
+		if (string.find(cleantext, "GUID") ~= nil) then
+			local	guid = cleantext
+			local	id = 0
+			local	a, b = string.find(cleantext, '%[.-%]')
+			
+			cnoname = nil
+			guid = string.sub(cleantext, a + 1, b - 1)
+			a, b = string.find(cleantext, '%d')
+			id = string.sub(cleantext, a, b)
+			id = tonumber(id)
+
+			local	banned, Rtime = checkIfBanned(id)
+			if (banned == true) then
+				et.trap_DropClient(id, "Banned by admin", Rtime)
+				return
+			end
+			table.insert(client_guid, {id, guid})
+		end	
+	end
+end
+
+function 	et_ClientBegin(clientNum)
+	local	gamestate = tonumber(et.trap_Cvar_Get("gamestate"))
+	
+	if (pass == 0) then	-- Also need to do it here because lua are loading when game starts
 		sys_level = get_levels()
 		if (sys_level == nil) then et.trap_SendServerCommand(-1, "chat \"FAIL\"") end
 		get_pl_levels()
+		pass = 1
 	end
-	pass = 1
 	if (eraseElem(co_client, clientNum) == true) then
+		local	banned, Rtime = checkIfBanned(clientNum)
+		if (banned == true) then
+			et.trap_DropClient(clientNum, "Banned by admin", Rtime)
+			return
+		end
 		local	name = getCvar(clientNum, "name")
 		local	rank = get_pl_rank_from_lev(getLev(clientNum))
 
+		cnoname = et.Info_ValueForKey(et.trap_GetUserinfo(clientNum), "name")
 		et.trap_SendServerCommand(-1, "chat \"^7Welcome to "..name..", ^2"..rank.."\"")
 	end
 end
@@ -874,4 +1140,5 @@ end
 function	et_ClientDisconnect(clientNum)
 	get_pl_levels()	-- need to refresh the players level
 	eraseElem(co_client, clientNum)
+	removeClientGuid(clientNum)
 end
